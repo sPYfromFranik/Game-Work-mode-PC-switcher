@@ -72,3 +72,7 @@ Set `MODESWITCHER_DATA_DIR` to redirect them during automated tests.
 HDR is controlled through Windows display-configuration APIs. Skydimo integration
 uses its loopback-only JSON-RPC WebSocket API and does not send lighting data over
 the internet.
+
+## License
+
+Mode Switcher is available under the [MIT License](LICENSE).

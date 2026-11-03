@@ -15,6 +15,9 @@
     <PathMap>$(MSBuildProjectDirectory)=/_/</PathMap>
     <AssemblyName>ModeSwitcher</AssemblyName>
     <RootNamespace>ModeSwitcher</RootNamespace>
+    <Version>1.0.1</Version>
+    <AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <FileVersion>1.0.1.0</FileVersion>
     <ApplicationIcon>assets\ModeSwitcher.ico</ApplicationIcon>
     <RepositoryUrl>https://github.com/sPYfromFranik/Game-Work-mode-PC-switcher</RepositoryUrl>
   </PropertyGroup>
@@ -22,4 +25,7 @@
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="assets\ModeSwitcher.png" LogicalName="ModeSwitcher.Icon.png" />
+  </ItemGroup>
 </Project>

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Net.NetworkInformation;
 using System.Net.WebSockets;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -151,8 +152,17 @@ internal static class ModeNotification
             };
             try
             {
-                using var icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
-                iconBox.Image = icon?.ToBitmap();
+                using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("ModeSwitcher.Icon.png");
+                if (stream is not null)
+                {
+                    using var source = new Bitmap(stream);
+                    iconBox.Image = new Bitmap(source);
+                }
+                else
+                {
+                    using var icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
+                    iconBox.Image = icon?.ToBitmap();
+                }
             }
             catch { }
 

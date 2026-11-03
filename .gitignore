@@ -1,0 +1,46 @@
+# .NET build and publish output
+[Bb]in/
+[Oo]bj/
+[Dd]ist/
+[Pp]ublish/
+[Aa]rtifacts/
+[Dd]ebug/
+[Rr]elease/
+*.exe
+*.dll
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+
+# IDE and user-specific files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.rsuser
+*.userosscache
+*.sln.docstates
+
+# Local state, logs, and diagnostic output
+.test-data*/
+.icon-test-data*/
+assets/*-v*.png
+*.log
+*.tmp
+*.binlog
+state.txt
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pfx
+*.publishsettings
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

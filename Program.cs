@@ -10,7 +10,7 @@ using Microsoft.Win32;
 
 namespace ModeSwitcher;
 
-internal enum DesktopMode { Work, Game }
+internal enum DesktopMode { Work, Game, Music }
 
 internal static class Program
 {
@@ -22,6 +22,9 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
         Directory.CreateDirectory(DataDirectory);
         using var mutex = new Mutex(true, @"Local\ModeSwitcher.SingleInstance", out var ownsMutex);
         if (!ownsMutex) return 0;
@@ -32,9 +35,25 @@ internal static class Program
 
     private static async Task<int> RunAsync(string[] args)
     {
+        var renderIcon = args.FirstOrDefault(a => a.StartsWith("--render-icon=", StringComparison.OrdinalIgnoreCase));
+        if (renderIcon is not null)
+        {
+            AppArtwork.Render(renderIcon[14..]);
+            return 0;
+        }
+
+        var renderUi = args.FirstOrDefault(a => a.StartsWith("--render-ui=", StringComparison.OrdinalIgnoreCase));
+        if (renderUi is not null)
+        {
+            using var selector = new ModeSelectorForm(ReadState());
+            selector.RenderSnapshot(renderUi[12..]);
+            return 0;
+        }
+
         if (args.Any(a => a.Equals("--notification-test", StringComparison.OrdinalIgnoreCase)))
         {
-            ModeNotification.Show("Game mode on");
+            var testMode = ParseModeArgument(args) ?? DesktopMode.Music;
+            ModeNotification.Show($"{testMode} mode on");
             return 0;
         }
 
@@ -42,11 +61,27 @@ internal static class Program
         try
         {
             var previous = ReadState();
-            var target = previous == DesktopMode.Game ? DesktopMode.Work : DesktopMode.Game;
+            var target = ParseModeArgument(args);
+
+            if (!dryRun && target is null)
+            {
+                using var selector = new ModeSelectorForm(previous);
+                Application.Run(selector);
+                target = selector.SelectedMode;
+                if (target is null) return 0;
+            }
+
+            target ??= previous;
             Log($"Switch requested: {previous} -> {target}{(dryRun ? " (dry run)" : "")}");
 
             if (dryRun)
             {
+                Log(target switch
+                {
+                    DesktopMode.Game => "Plan: HDR on; DND on; all Skydimo devices on with ScreenMirror; open Steam.",
+                    DesktopMode.Music => "Plan: leave HDR unchanged; DND off; all Skydimo devices on with AudioSine; open and play Spotify.",
+                    _ => "Plan: HDR off; DND off; all Skydimo devices off."
+                });
                 Log($"HDR-capable active displays: {HdrController.GetHdrCapableDisplayCount()}");
                 Log($"Do not disturb: {DoNotDisturbController.DescribeCurrentState()}");
                 Log($"Skydimo endpoint: {(await SkydimoController.FindEndpointAsync(TimeSpan.FromMilliseconds(600)) is null ? "not found" : "found")}");
@@ -54,12 +89,19 @@ internal static class Program
             }
 
             var errors = new List<string>();
-            Try("HDR", () => HdrController.SetHdr(target == DesktopMode.Game), errors);
+            if (target != DesktopMode.Music)
+                Try("HDR", () => HdrController.SetHdr(target == DesktopMode.Game), errors);
             Try("Do not disturb", () => DoNotDisturbController.SetEnabled(target == DesktopMode.Game), errors);
 
             try
             {
-                await SkydimoController.SetLightingAsync(target == DesktopMode.Game, Log);
+                var effect = target switch
+                {
+                    DesktopMode.Game => "ScreenMirror",
+                    DesktopMode.Music => "AudioSine",
+                    _ => null
+                };
+                await SkydimoController.SetLightingAsync(target != DesktopMode.Work, effect, Log);
             }
             catch (Exception ex)
             {
@@ -68,6 +110,8 @@ internal static class Program
 
             if (target == DesktopMode.Game)
                 Try("Steam", SteamController.Open, errors);
+            else if (target == DesktopMode.Music)
+                Try("Spotify", SpotifyController.OpenAndPlay, errors);
 
             File.WriteAllText(StatePath, target.ToString(), Encoding.UTF8);
             Log($"Mode saved as {target}. " + (errors.Count == 0 ? "All settings applied." : string.Join(" | ", errors)));
@@ -79,6 +123,12 @@ internal static class Program
             Log("Fatal: " + ex);
             return 2;
         }
+    }
+
+    private static DesktopMode? ParseModeArgument(IEnumerable<string> args)
+    {
+        var value = args.FirstOrDefault(a => a.StartsWith("--mode=", StringComparison.OrdinalIgnoreCase))?[7..];
+        return Enum.TryParse<DesktopMode>(value, true, out var mode) ? mode : null;
     }
 
     private static DesktopMode ReadState()
@@ -101,6 +151,259 @@ internal static class Program
     }
 }
 
+internal sealed class ModeSelectorForm : Form
+{
+    public DesktopMode? SelectedMode { get; private set; }
+
+    public ModeSelectorForm(DesktopMode currentMode)
+    {
+        AutoScaleMode = AutoScaleMode.Dpi;
+        BackColor = ThemeColors.Window;
+        ClientSize = new Size(414, 174);
+        FormBorderStyle = FormBorderStyle.None;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = true;
+        StartPosition = FormStartPosition.CenterScreen;
+        Text = "Mode Switcher";
+        try { Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!); } catch { }
+
+        var close = new Button
+        {
+            AccessibleName = "Close",
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+            BackColor = ThemeColors.Window,
+            FlatStyle = FlatStyle.Flat,
+            Font = new Font("Segoe UI", 13F, FontStyle.Regular),
+            ForeColor = ThemeColors.Text,
+            Location = new Point(ClientSize.Width - 38, 4),
+            Size = new Size(34, 30),
+            TabStop = false,
+            Text = "×"
+        };
+        close.FlatAppearance.BorderSize = 0;
+        close.Click += (_, _) => Close();
+        Controls.Add(close);
+
+        var title = new Label
+        {
+            AutoSize = true,
+            Font = new Font("Segoe UI Semibold", 11F, FontStyle.Bold),
+            ForeColor = ThemeColors.Text,
+            Location = new Point(15, 10),
+            Text = "Choose a mode"
+        };
+        Controls.Add(title);
+
+        var modes = new[] { DesktopMode.Work, DesktopMode.Game, DesktopMode.Music };
+        for (var index = 0; index < modes.Length; index++)
+        {
+            var button = new ModeButton(modes[index])
+            {
+                Location = new Point(15 + index * 133, 48),
+                Size = new Size(118, 108)
+            };
+            if (modes[index] == currentMode) button.SetCurrent();
+            button.Click += (_, _) =>
+            {
+                SelectedMode = button.Mode;
+                Close();
+            };
+            Controls.Add(button);
+        }
+
+        KeyPreview = true;
+        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) Close(); };
+        MouseDown += (_, e) => { if (e.Button == MouseButtons.Left) BeginDrag(); };
+        title.MouseDown += (_, e) => { if (e.Button == MouseButtons.Left) BeginDrag(); };
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        using var border = new Pen(ThemeColors.Border);
+        e.Graphics.DrawRectangle(border, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+    }
+
+    public void RenderSnapshot(string outputPath)
+    {
+        using var bitmap = new Bitmap(ClientSize.Width, ClientSize.Height);
+        StartPosition = FormStartPosition.Manual;
+        Location = new Point(-10_000, -10_000);
+        ShowInTaskbar = false;
+        Show();
+        Application.DoEvents();
+        DrawToBitmap(bitmap, ClientRectangle);
+        Hide();
+        var fullPath = Path.GetFullPath(outputPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        bitmap.Save(fullPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    private void BeginDrag()
+    {
+        ReleaseCapture();
+        SendMessage(Handle, 0xA1, new IntPtr(2), IntPtr.Zero);
+    }
+
+    [DllImport("user32.dll")] private static extern bool ReleaseCapture();
+    [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hWnd, int message, IntPtr wParam, IntPtr lParam);
+}
+
+internal sealed class ModeButton : Button
+{
+    public DesktopMode Mode { get; }
+
+    public ModeButton(DesktopMode mode)
+    {
+        Mode = mode;
+        AccessibleName = $"{mode} mode";
+        BackColor = ThemeColors.Control;
+        FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderColor = ThemeColors.Border;
+        FlatAppearance.MouseDownBackColor = ThemeColors.Accent;
+        FlatAppearance.MouseOverBackColor = ThemeColors.Hover;
+        Font = new Font("Segoe UI Semibold", 10F, FontStyle.Bold);
+        ForeColor = ThemeColors.Text;
+        Text = mode.ToString();
+        TextAlign = ContentAlignment.BottomCenter;
+        Padding = new Padding(0, 0, 0, 10);
+        UseVisualStyleBackColor = false;
+    }
+
+    public void SetCurrent()
+    {
+        FlatAppearance.BorderColor = ThemeColors.Accent;
+        FlatAppearance.BorderSize = 2;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        IconGlyph.Draw(e.Graphics, Mode, new Rectangle(37, 18, 44, 44), ForeColor);
+    }
+}
+
+internal static class ThemeColors
+{
+    private static readonly bool Dark = ReadDarkPreference();
+    public static Color Window => Dark ? Color.FromArgb(32, 32, 32) : SystemColors.Window;
+    public static Color Control => Dark ? Color.FromArgb(45, 45, 45) : SystemColors.Control;
+    public static Color Hover => Dark ? Color.FromArgb(58, 58, 58) : SystemColors.ControlLight;
+    public static Color Border => Dark ? Color.FromArgb(92, 92, 92) : SystemColors.ControlDark;
+    public static Color Text => Dark ? Color.FromArgb(245, 245, 245) : SystemColors.WindowText;
+    public static Color MutedText => Dark ? Color.FromArgb(180, 180, 180) : SystemColors.GrayText;
+    public static Color Accent => SystemColors.Highlight;
+
+    private static bool ReadDarkPreference()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+            return key?.GetValue("AppsUseLightTheme") is int value && value == 0;
+        }
+        catch { return false; }
+    }
+}
+
+internal static class IconGlyph
+{
+    public static void Draw(Graphics graphics, DesktopMode mode, Rectangle bounds, Color color)
+    {
+        var pathData = mode switch
+        {
+            DesktopMode.Work => "M304 112 L192 112 C183.2 112 176 119.2 176 128 L176 512 C176 520.8 183.2 528 192 528 L448 528 C456.8 528 464 520.8 464 512 L464 272 L376 272 C336.2 272 304 239.8 304 200 L304 112 z M444.1 224 L352 131.9 L352 200 C352 213.3 362.7 224 376 224 L444.1 224 z M128 128 C128 92.7 156.7 64 192 64 L325.5 64 C342.5 64 358.8 70.7 370.8 82.7 L493.3 205.3 C505.3 217.3 512 233.6 512 250.6 L512 512 C512 547.3 483.3 576 448 576 L192 576 C156.7 576 128 547.3 128 512 L128 128 z",
+            DesktopMode.Game => "M448 128 C554 128 640 214 640 320 C640 426 554 512 448 512 L192 512 C86 512 0 426 0 320 C0 214 86 128 192 128 L448 128 z M192 240 C178.7 240 168 250.7 168 264 L168 296 L136 296 C122.7 296 112 306.7 112 320 C112 333.3 122.7 344 136 344 L168 344 L168 376 C168 389.3 178.7 400 192 400 C205.3 400 216 389.3 216 376 L216 344 L248 344 C261.3 344 272 333.3 272 320 C272 306.7 261.3 296 248 296 L216 296 L216 264 C216 250.7 205.3 240 192 240 z M432 336 C414.3 336 400 350.3 400 368 C400 385.7 414.3 400 432 400 C449.7 400 464 385.7 464 368 C464 350.3 449.7 336 432 336 z M496 240 C478.3 240 464 254.3 464 272 C464 289.7 478.3 304 496 304 C513.7 304 528 289.7 528 272 C528 254.3 513.7 240 496 240 z",
+            _ => "M532 71 C539.6 77.1 544 86.3 544 96 L544 400 C544 444.2 501 480 448 480 C395 480 352 444.2 352 400 C352 355.8 395 320 448 320 C459.2 320 470 321.6 480 324.6 L480 207.9 L256 257.7 L256 464 C256 508.2 213 544 160 544 C107 544 64 508.2 64 464 C64 419.8 107 384 160 384 C171.2 384 182 385.6 192 388.6 L192 160 C192 145 202.4 132 217.1 128.8 L505.1 64.8 C514.6 62.7 524.5 65 532.1 71.1 z"
+        };
+
+        using var path = ParsePath(pathData);
+        using var matrix = new Matrix();
+        var sourceWidth = mode == DesktopMode.Game ? 640F : 640F;
+        matrix.Translate(bounds.Left, bounds.Top);
+        matrix.Scale(bounds.Width / sourceWidth, bounds.Height / 640F);
+        path.Transform(matrix);
+        using var brush = new SolidBrush(color);
+        graphics.FillPath(brush, path);
+    }
+
+    private static GraphicsPath ParsePath(string data)
+    {
+        var tokens = System.Text.RegularExpressions.Regex.Matches(data, @"[A-Za-z]|-?\d+(?:\.\d+)?")
+            .Select(match => match.Value).ToArray();
+        var path = new GraphicsPath(FillMode.Winding);
+        var index = 0;
+        var current = PointF.Empty;
+        var start = PointF.Empty;
+        while (index < tokens.Length)
+        {
+            var command = tokens[index++][0];
+            switch (command)
+            {
+                case 'M':
+                    current = ReadPoint(tokens, ref index); start = current; path.StartFigure();
+                    break;
+                case 'L':
+                {
+                    var next = ReadPoint(tokens, ref index); path.AddLine(current, next); current = next; break;
+                }
+                case 'C':
+                {
+                    var control1 = ReadPoint(tokens, ref index);
+                    var control2 = ReadPoint(tokens, ref index);
+                    var next = ReadPoint(tokens, ref index);
+                    path.AddBezier(current, control1, control2, next); current = next; break;
+                }
+                case 'z': case 'Z':
+                    path.CloseFigure(); current = start; break;
+                default: throw new InvalidOperationException($"Unsupported SVG command {command}.");
+            }
+        }
+        return path;
+    }
+
+    private static PointF ReadPoint(string[] tokens, ref int index) =>
+        new(float.Parse(tokens[index++], System.Globalization.CultureInfo.InvariantCulture),
+            float.Parse(tokens[index++], System.Globalization.CultureInfo.InvariantCulture));
+}
+
+internal static class AppArtwork
+{
+    public static void Render(string outputPath)
+    {
+        using var bitmap = new Bitmap(1024, 1024, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        graphics.CompositingQuality = CompositingQuality.HighQuality;
+        using var backgroundPath = RoundedRectangle(new Rectangle(20, 20, 984, 984), 190);
+        using var background = new LinearGradientBrush(new Point(80, 60), new Point(940, 980),
+            Color.FromArgb(5, 23, 61), Color.FromArgb(13, 71, 128));
+        graphics.FillPath(background, backgroundPath);
+
+        var glyphColor = Color.FromArgb(250, 252, 255);
+        IconGlyph.Draw(graphics, DesktopMode.Work, new Rectangle(347, 55, 330, 330), glyphColor);
+        IconGlyph.Draw(graphics, DesktopMode.Game, new Rectangle(75, 620, 330, 330), glyphColor);
+        IconGlyph.Draw(graphics, DesktopMode.Music, new Rectangle(619, 620, 330, 330), glyphColor);
+
+        var fullPath = Path.GetFullPath(outputPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        bitmap.Save(fullPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    private static GraphicsPath RoundedRectangle(Rectangle bounds, int radius)
+    {
+        var path = new GraphicsPath();
+        var diameter = radius * 2;
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+}
+
 internal static class ModeNotification
 {
     public static void Show(string message)
@@ -109,7 +412,6 @@ internal static class ModeNotification
         {
             try
             {
-                Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
                 Application.Run(new ModePopup(message));
             }
             catch { }
@@ -131,7 +433,7 @@ internal static class ModeNotification
         public ModePopup(string message)
         {
             AutoScaleMode = AutoScaleMode.Dpi;
-            BackColor = Color.FromArgb(30, 32, 38);
+            BackColor = ThemeColors.Window;
             ClientSize = new Size(360, 96);
             ControlBox = false;
             FormBorderStyle = FormBorderStyle.None;
@@ -171,7 +473,7 @@ internal static class ModeNotification
                 AutoSize = true,
                 BackColor = Color.Transparent,
                 Font = new Font("Segoe UI", 9F, FontStyle.Regular),
-                ForeColor = Color.FromArgb(174, 178, 188),
+                ForeColor = ThemeColors.MutedText,
                 Location = new Point(92, 19),
                 Text = "MODE SWITCHER"
             };
@@ -181,7 +483,7 @@ internal static class ModeNotification
                 AutoEllipsis = true,
                 BackColor = Color.Transparent,
                 Font = new Font("Segoe UI Semibold", 15F, FontStyle.Bold),
-                ForeColor = Color.White,
+                ForeColor = ThemeColors.Text,
                 Location = new Point(88, 42),
                 Size = new Size(250, 36),
                 Text = message,
@@ -362,9 +664,46 @@ internal static class SteamController
     }
 }
 
+internal static class SpotifyController
+{
+    private const int WmAppCommand = 0x0319;
+    private const int AppCommandMediaPlay = 46;
+
+    public static void OpenAndPlay()
+    {
+        var spotifyProcesses = Process.GetProcessesByName("Spotify");
+        bool alreadyPlaying;
+        try { alreadyPlaying = spotifyProcesses.Any(IsLikelyPlaying); }
+        finally { foreach (var process in spotifyProcesses) process.Dispose(); }
+        Process.Start(new ProcessStartInfo("spotify:") { UseShellExecute = true });
+        if (alreadyPlaying) return;
+
+        Thread.Sleep(1200);
+        _ = PostMessage(new IntPtr(0xffff), WmAppCommand, IntPtr.Zero,
+            new IntPtr(AppCommandMediaPlay << 16));
+    }
+
+    private static bool IsLikelyPlaying(Process process)
+    {
+        try
+        {
+            process.Refresh();
+            var title = process.MainWindowTitle.Trim();
+            return title.Length > 0
+                && !title.Equals("Spotify", StringComparison.OrdinalIgnoreCase)
+                && !title.Equals("Spotify Free", StringComparison.OrdinalIgnoreCase)
+                && !title.Equals("Spotify Premium", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+}
+
 internal static class SkydimoController
 {
-    public static async Task SetLightingAsync(bool on, Action<string> log)
+    public static async Task SetLightingAsync(bool on, string? effectId, Action<string> log)
     {
         var endpoint = await FindEndpointAsync(TimeSpan.FromMilliseconds(900));
         if (endpoint is null)
@@ -381,7 +720,7 @@ internal static class SkydimoController
         if (endpoint is null) throw new InvalidOperationException("Skydimo started, but its local API was not found.");
 
         using var socket = new ClientWebSocket();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(12));
         await socket.ConnectAsync(endpoint, timeout.Token);
         var devices = await RpcAsync(socket, "get_devices", null, 100, timeout.Token);
         if (devices.ValueKind != JsonValueKind.Array) throw new InvalidOperationException("Skydimo returned an invalid device list.");
@@ -392,11 +731,15 @@ internal static class SkydimoController
             if (!device.TryGetProperty("port", out var portElement)) continue;
             var port = portElement.GetString();
             if (string.IsNullOrWhiteSpace(port)) continue;
+            // Skydimo's RPC uses `off`; `turn_off` is an internal/config name and is ignored here.
             await RpcAsync(socket, "set_scope_power", new { port, off = !on }, 101 + count, timeout.Token);
+            if (on && effectId is not null)
+                // The RPC contract uses effectId; effect_id is only the persisted-config field name.
+                await RpcAsync(socket, "set_scope_effect", new { port, effectId }, 10_101 + count, timeout.Token);
             count++;
         }
         if (count == 0) throw new InvalidOperationException("No Skydimo lighting devices were detected.");
-        log($"Skydimo lighting set {(on ? "on" : "off")} for {count} device(s).");
+        log($"Skydimo lighting set {(on ? $"on with {effectId}" : "off")} for {count} device(s).");
     }
 
     public static async Task<Uri?> FindEndpointAsync(TimeSpan timeoutPerPort)

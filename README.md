@@ -9,21 +9,25 @@ setups. Launching it opens a system-themed chooser with one button per mode.
 
 | Setting | Work mode | Game mode | Music mode |
 |---|---:|---:|---:|
+| Windows power plan | High Performance → Balanced; otherwise unchanged | High Performance | High Performance → Balanced; otherwise unchanged |
 | HDR on every supported active display | Off | On | Unchanged |
 | Windows **Do not disturb** | Off | On | Off |
 | Skydimo device power | All off | All on | All on |
 | Skydimo effect | — | Screen Mirror | Audio Sine |
 | App action | No change | Open Steam | Open Spotify and play |
 
-After each switch, a custom bottom-right confirmation displays `Work mode on`,
-`Game mode on`, or `Music mode on`. It closes when clicked or fades automatically
-after 10 seconds.
+After each switch, a custom bottom-right confirmation displays the selected mode's
+glyph with `Work mode on`, `Game mode on`, or `Music mode on`. It closes when
+clicked or fades automatically after 10 seconds.
 
 ## How it works
 
 - The chooser highlights the most recently selected mode.
 - State and logs are stored in `%LOCALAPPDATA%\ModeSwitcher`.
 - Only one mode switch can execute at a time.
+- Game mode selects the built-in High Performance power plan. Work and Music
+  replace High Performance with Balanced, but preserve Balanced, Power Saver, and
+  custom plans that are already active.
 - The master Windows notifications setting remains enabled. Game mode selects the
   `Priority only` Do not disturb profile; Work mode selects the unrestricted profile.
 - Skydimo is started automatically when installed but not already running. Game

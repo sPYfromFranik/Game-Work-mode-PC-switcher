@@ -20,14 +20,21 @@ After each switch, a custom bottom-right confirmation displays the selected mode
 glyph with `Work mode on`, `Game mode on`, or `Music mode on`. It closes when
 clicked or fades automatically after 10 seconds.
 
+## Windows power-plan switching
+
+Game mode selects the built-in **High Performance** power plan. Work and Music
+switch to **Balanced** only when High Performance is active. If **Balanced**,
+**Power Saver**, or a custom plan is already active, Work and Music keep it.
+
+The app switches the active Windows power plan using the
+[Windows power scheme APIs](https://learn.microsoft.com/en-us/windows/win32/power/managing-power-schemes).
+The `--dry-run` option logs the current plan without switching it.
+
 ## How it works
 
 - The chooser highlights the most recently selected mode.
 - State and logs are stored in `%LOCALAPPDATA%\ModeSwitcher`.
 - Only one mode switch can execute at a time.
-- Game mode selects the built-in High Performance power plan. Work and Music
-  replace High Performance with Balanced, but preserve Balanced, Power Saver, and
-  custom plans that are already active.
 - The master Windows notifications setting remains enabled. Game mode selects the
   `Priority only` Do not disturb profile; Work mode selects the unrestricted profile.
 - Skydimo is started automatically when installed but not already running. Game

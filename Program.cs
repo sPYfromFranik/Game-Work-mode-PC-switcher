@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Net.NetworkInformation;
 using System.Net.WebSockets;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -53,7 +52,7 @@ internal static class Program
         if (args.Any(a => a.Equals("--notification-test", StringComparison.OrdinalIgnoreCase)))
         {
             var testMode = ParseModeArgument(args) ?? DesktopMode.Music;
-            ModeNotification.Show($"{testMode} mode on");
+            ModeNotification.Show(testMode);
             return 0;
         }
 
@@ -78,10 +77,11 @@ internal static class Program
             {
                 Log(target switch
                 {
-                    DesktopMode.Game => "Plan: HDR on; DND on; all Skydimo devices on with ScreenMirror; open Steam.",
-                    DesktopMode.Music => "Plan: leave HDR unchanged; DND off; all Skydimo devices on with AudioSine; open and play Spotify.",
-                    _ => "Plan: HDR off; DND off; all Skydimo devices off."
+                    DesktopMode.Game => "Plan: High Performance power plan; HDR on; DND on; all Skydimo devices on with ScreenMirror; open Steam.",
+                    DesktopMode.Music => "Plan: leave Balanced/Power Saver unchanged or replace High Performance with Balanced; leave HDR unchanged; DND off; all Skydimo devices on with AudioSine; open and play Spotify.",
+                    _ => "Plan: leave Balanced/Power Saver unchanged or replace High Performance with Balanced; HDR off; DND off; all Skydimo devices off."
                 });
+                Log($"Power plan: {PowerPlanController.DescribeCurrentPlan()}");
                 Log($"HDR-capable active displays: {HdrController.GetHdrCapableDisplayCount()}");
                 Log($"Do not disturb: {DoNotDisturbController.DescribeCurrentState()}");
                 Log($"Skydimo endpoint: {(await SkydimoController.FindEndpointAsync(TimeSpan.FromMilliseconds(600)) is null ? "not found" : "found")}");
@@ -89,6 +89,7 @@ internal static class Program
             }
 
             var errors = new List<string>();
+            Try("Power plan", () => PowerPlanController.Apply(target.Value), errors);
             if (target != DesktopMode.Music)
                 Try("HDR", () => HdrController.SetHdr(target == DesktopMode.Game), errors);
             Try("Do not disturb", () => DoNotDisturbController.SetEnabled(target == DesktopMode.Game), errors);
@@ -115,7 +116,7 @@ internal static class Program
 
             File.WriteAllText(StatePath, target.ToString(), Encoding.UTF8);
             Log($"Mode saved as {target}. " + (errors.Count == 0 ? "All settings applied." : string.Join(" | ", errors)));
-            ModeNotification.Show($"{target} mode on");
+            ModeNotification.Show(target.Value);
             return errors.Count == 0 ? 0 : 1;
         }
         catch (Exception ex)
@@ -406,13 +407,13 @@ internal static class AppArtwork
 
 internal static class ModeNotification
 {
-    public static void Show(string message)
+    public static void Show(DesktopMode mode)
     {
         var thread = new Thread(() =>
         {
             try
             {
-                Application.Run(new ModePopup(message));
+                Application.Run(new ModePopup(mode));
             }
             catch { }
         })
@@ -430,7 +431,7 @@ internal static class ModeNotification
         private readonly System.Windows.Forms.Timer animationTimer = new() { Interval = 25 };
         private bool closing;
 
-        public ModePopup(string message)
+        public ModePopup(DesktopMode mode)
         {
             AutoScaleMode = AutoScaleMode.Dpi;
             BackColor = ThemeColors.Window;
@@ -445,28 +446,12 @@ internal static class ModeNotification
             StartPosition = FormStartPosition.Manual;
             TopMost = true;
 
-            var iconBox = new PictureBox
+            var modeGlyph = new ModeGlyph(mode)
             {
                 BackColor = Color.Transparent,
                 Location = new Point(18, 20),
-                Size = new Size(56, 56),
-                SizeMode = PictureBoxSizeMode.Zoom
+                Size = new Size(56, 56)
             };
-            try
-            {
-                using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("ModeSwitcher.Icon.png");
-                if (stream is not null)
-                {
-                    using var source = new Bitmap(stream);
-                    iconBox.Image = new Bitmap(source);
-                }
-                else
-                {
-                    using var icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
-                    iconBox.Image = icon?.ToBitmap();
-                }
-            }
-            catch { }
 
             var heading = new Label
             {
@@ -486,11 +471,11 @@ internal static class ModeNotification
                 ForeColor = ThemeColors.Text,
                 Location = new Point(88, 42),
                 Size = new Size(250, 36),
-                Text = message,
+                Text = $"{mode} mode on",
                 TextAlign = ContentAlignment.MiddleLeft
             };
 
-            Controls.Add(iconBox);
+            Controls.Add(modeGlyph);
             Controls.Add(heading);
             Controls.Add(body);
 
@@ -505,7 +490,6 @@ internal static class ModeNotification
                 lifetimeTimer.Start();
                 animationTimer.Start();
             };
-            FormClosed += (_, _) => iconBox.Image?.Dispose();
         }
 
         protected override bool ShowWithoutActivation => true;
@@ -562,7 +546,77 @@ internal static class ModeNotification
             path.CloseFigure();
             return new Region(path);
         }
+
+        private sealed class ModeGlyph : Control
+        {
+            private readonly DesktopMode mode;
+
+            public ModeGlyph(DesktopMode mode)
+            {
+                this.mode = mode;
+                SetStyle(ControlStyles.AllPaintingInWmPaint |
+                    ControlStyles.OptimizedDoubleBuffer |
+                    ControlStyles.SupportsTransparentBackColor |
+                    ControlStyles.UserPaint, true);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                IconGlyph.Draw(e.Graphics, mode, ClientRectangle, ThemeColors.Text);
+            }
+        }
     }
+}
+
+internal static class PowerPlanController
+{
+    private static readonly Guid Balanced = new("381b4222-f694-41f0-9685-ff5bb260df2e");
+    private static readonly Guid HighPerformance = new("8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c");
+    private static readonly Guid PowerSaver = new("a1841308-3541-4fab-bc81-f71556f20b4a");
+
+    public static void Apply(DesktopMode mode)
+    {
+        var current = GetActivePlan();
+        var target = mode == DesktopMode.Game
+            ? HighPerformance
+            : current == HighPerformance ? Balanced : current;
+        if (target == current) return;
+
+        var result = PowerSetActiveScheme(IntPtr.Zero, ref target);
+        if (result != 0) throw new InvalidOperationException($"Windows error {result} while activating the power plan.");
+    }
+
+    public static string DescribeCurrentPlan()
+    {
+        try
+        {
+            var current = GetActivePlan();
+            if (current == Balanced) return "Balanced";
+            if (current == HighPerformance) return "High Performance";
+            if (current == PowerSaver) return "Power Saver";
+            return $"Custom ({current})";
+        }
+        catch (Exception ex) { return "unavailable: " + ex.Message; }
+    }
+
+    private static Guid GetActivePlan()
+    {
+        var result = PowerGetActiveScheme(IntPtr.Zero, out var planPointer);
+        if (result != 0) throw new InvalidOperationException($"Windows error {result} while reading the active power plan.");
+        try { return Marshal.PtrToStructure<Guid>(planPointer); }
+        finally { if (planPointer != IntPtr.Zero) LocalFree(planPointer); }
+    }
+
+    [DllImport("powrprof.dll")]
+    private static extern uint PowerGetActiveScheme(IntPtr userRootPowerKey, out IntPtr activePolicyGuid);
+
+    [DllImport("powrprof.dll")]
+    private static extern uint PowerSetActiveScheme(IntPtr userRootPowerKey, ref Guid schemeGuid);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr memory);
 }
 
 internal static class DoNotDisturbController
